@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+
+# 挂载项格式:
+#   名称|用户名|主机|远程路径|本地挂载点|端口
+SSHFS_ENTRIES=(
+    "signal-server-home|your-user|signal-server|/home/your-user|$HOME/mount/signal-server|22"
+    "signal-server-data|your-user|signal-server|/data|$HOME/mount/signal-server-data|22"
+)
+
+# 重试配置
+MAX_RETRY=3
+RETRY_DELAY=5
+
+# 网络匹配模式:
+#   always   总是允许挂载
+#   match    只有命中下面任一规则才允许挂载
+NETWORK_MODE="match"
+
+# 任一数组命中即认为当前网络可挂载。可以按需留空。
+NETWORK_GATEWAYS=(
+    "10.95.64.1"
+)
+
+NETWORK_DNS=(
+    "10.95.26.32"
+)
+
+NETWORK_IP_PREFIXES=(
+    "10.95.64"
+)
+
+NETWORK_INTERFACES=(
+    "utun0"
+    "utun1"
+)
+
+NETWORK_SSIDS=(
+    "XP-OFFICE-WORK"
+)

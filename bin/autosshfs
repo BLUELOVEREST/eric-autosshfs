@@ -1,0 +1,604 @@
+#!/usr/bin/env bash
+
+set -uo pipefail
+
+APP_NAME="autosshfs"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/${APP_NAME}"
+CONFIG_FILE="${AUTOSSHFS_CONFIG:-$CONFIG_DIR/config.sh}"
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/${APP_NAME}"
+LOG_FILE="${AUTOSSHFS_LOG_FILE:-$LOG_DIR/${APP_NAME}.log}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+SSHFS_ENTRIES=()
+MAX_RETRY=3
+RETRY_DELAY=5
+NETWORK_MODE="always"
+NETWORK_GATEWAYS=()
+NETWORK_DNS=()
+NETWORK_IP_PREFIXES=()
+NETWORK_INTERFACES=()
+NETWORK_SSIDS=()
+
+detect_os() {
+    case "${OSTYPE:-}" in
+        darwin*) echo "macos" ;;
+        linux*) echo "linux" ;;
+        *) echo "unknown" ;;
+    esac
+}
+
+OS_TYPE="$(detect_os)"
+
+log() {
+    local level="$1"
+    shift
+
+    mkdir -p "$LOG_DIR" 2>/dev/null || true
+    touch "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/${APP_NAME}.log"
+    printf '[%s] [%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$level" "$*" | tee -a "$LOG_FILE"
+}
+
+die() {
+    log "ERROR" "$*"
+    exit 1
+}
+
+command_exists() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+expand_path() {
+    local raw_path="$1"
+    eval "printf '%s\n' \"$raw_path\""
+}
+
+load_config() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        cat <<EOF
+配置文件不存在: $CONFIG_FILE
+
+请先执行:
+  autosshfs init-config
+
+或者设置环境变量:
+  AUTOSSHFS_CONFIG=/path/to/config.sh
+EOF
+        exit 1
+    fi
+
+    # shellcheck disable=SC1090
+    . "$CONFIG_FILE"
+}
+
+check_dependencies() {
+    if ! command_exists sshfs; then
+        if [ "$OS_TYPE" = "macos" ]; then
+            die "未找到 sshfs。请先安装 macFUSE 与 sshfs: brew install --cask macfuse && brew install gromgit/fuse/sshfs-mac"
+        elif [ "$OS_TYPE" = "linux" ]; then
+            die "未找到 sshfs。请先安装依赖: sudo apt-get install -y sshfs"
+        else
+            die "未找到 sshfs，且当前系统未被支持"
+        fi
+    fi
+
+    if [ "$OS_TYPE" = "linux" ] && ! command_exists mountpoint; then
+        die "未找到 mountpoint。请安装 util-linux"
+    fi
+}
+
+print_ok() {
+    printf '[OK] %s\n' "$*"
+}
+
+print_warn() {
+    printf '[WARN] %s\n' "$*"
+}
+
+print_info() {
+    printf '[INFO] %s\n' "$*"
+}
+
+doctor_macos() {
+    local failed=0
+
+    if command_exists brew; then
+        print_ok "已检测到 Homebrew"
+    else
+        print_warn "未检测到 Homebrew"
+        failed=1
+    fi
+
+    if command_exists sshfs; then
+        print_ok "已检测到 sshfs"
+    else
+        print_warn "未检测到 sshfs"
+        print_info "可尝试执行: brew install gromgit/fuse/sshfs-mac"
+        failed=1
+    fi
+
+    if [ -e /Library/Filesystems/macfuse.fs ] || [ -e /Library/Extensions/macfuse.kext ]; then
+        print_ok "检测到 macFUSE 文件"
+    else
+        print_warn "未检测到 macFUSE 安装痕迹"
+        print_info "可尝试执行: brew install --cask macfuse"
+        failed=1
+    fi
+
+    if systemextensionsctl list 2>/dev/null | grep -qi 'macfuse'; then
+        print_ok "检测到 macFUSE 系统扩展记录"
+    else
+        print_warn "未在 systemextensionsctl 中看到 macFUSE"
+        print_info "如果刚安装过 macFUSE，可能还需要在 系统设置 > 隐私与安全性 中手动允许"
+    fi
+
+    return "$failed"
+}
+
+doctor_linux() {
+    local failed=0
+
+    if command_exists sshfs; then
+        print_ok "已检测到 sshfs"
+    else
+        print_warn "未检测到 sshfs"
+        print_info "Debian/Ubuntu 可执行: sudo apt-get install -y sshfs"
+        failed=1
+    fi
+
+    if command_exists fusermount || command_exists fusermount3; then
+        print_ok "已检测到 fusermount"
+    else
+        print_warn "未检测到 fusermount/fusermount3"
+        failed=1
+    fi
+
+    if command_exists mountpoint; then
+        print_ok "已检测到 mountpoint"
+    else
+        print_warn "未检测到 mountpoint，请安装 util-linux"
+        failed=1
+    fi
+
+    if [ -f /etc/fuse.conf ]; then
+        if grep -Eq '^[[:space:]]*user_allow_other' /etc/fuse.conf 2>/dev/null; then
+            print_ok "/etc/fuse.conf 已启用 user_allow_other"
+        else
+            print_warn "/etc/fuse.conf 未启用 user_allow_other，可能影响 allow_other 选项"
+        fi
+    else
+        print_warn "未找到 /etc/fuse.conf"
+    fi
+
+    return "$failed"
+}
+
+doctor_config() {
+    if [ -f "$CONFIG_FILE" ]; then
+        print_ok "配置文件存在: $CONFIG_FILE"
+    else
+        print_warn "配置文件不存在: $CONFIG_FILE"
+        print_info "先执行: autosshfs init-config"
+        return 1
+    fi
+    return 0
+}
+
+doctor_network() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        return 0
+    fi
+
+    load_config
+    if check_network >/dev/null 2>&1; then
+        print_ok "当前网络环境满足挂载条件"
+    else
+        print_warn "当前网络环境未命中配置规则"
+    fi
+}
+
+doctor() {
+    local failed=0
+
+    printf 'OS: %s\n' "$OS_TYPE"
+    printf 'Config: %s\n' "$CONFIG_FILE"
+    printf '\n'
+
+    doctor_config || failed=1
+    case "$OS_TYPE" in
+        macos) doctor_macos || failed=1 ;;
+        linux) doctor_linux || failed=1 ;;
+        *)
+            print_warn "当前系统未支持自动诊断"
+            failed=1
+            ;;
+    esac
+    doctor_network
+    return "$failed"
+}
+
+network_check_disabled() {
+    [ "${NETWORK_MODE:-always}" = "always" ]
+}
+
+check_network_macos() {
+    local gateway dns prefix iface ssid current_ssid
+
+    for ssid in "${NETWORK_SSIDS[@]:-}"; do
+        current_ssid="$(
+            /System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport -I 2>/dev/null |
+                awk -F': ' '/ SSID/ {print $2}'
+        )"
+        if [ -n "$current_ssid" ] && [ "$current_ssid" = "$ssid" ]; then
+            log "INFO" "检测到匹配的 Wi-Fi SSID: $ssid"
+            return 0
+        fi
+    done
+
+    for gateway in "${NETWORK_GATEWAYS[@]:-}"; do
+        if netstat -nr 2>/dev/null | grep -q "default.*${gateway}"; then
+            log "INFO" "检测到匹配网关: $gateway"
+            return 0
+        fi
+    done
+
+    for dns in "${NETWORK_DNS[@]:-}"; do
+        if scutil --dns 2>/dev/null | grep -q "$dns"; then
+            log "INFO" "检测到匹配 DNS: $dns"
+            return 0
+        fi
+    done
+
+    for prefix in "${NETWORK_IP_PREFIXES[@]:-}"; do
+        if ifconfig 2>/dev/null | grep -q "inet ${prefix}"; then
+            log "INFO" "检测到匹配 IP 前缀: $prefix"
+            return 0
+        fi
+    done
+
+    for iface in "${NETWORK_INTERFACES[@]:-}"; do
+        if ifconfig 2>/dev/null | grep -q "^${iface}"; then
+            log "INFO" "检测到匹配接口: $iface"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+check_network_linux() {
+    local gateway dns prefix iface
+
+    for gateway in "${NETWORK_GATEWAYS[@]:-}"; do
+        if ip route 2>/dev/null | grep -q "default via ${gateway}"; then
+            log "INFO" "检测到匹配网关: $gateway"
+            return 0
+        fi
+    done
+
+    for dns in "${NETWORK_DNS[@]:-}"; do
+        if grep -q "nameserver ${dns}" /etc/resolv.conf 2>/dev/null; then
+            log "INFO" "检测到匹配 DNS: $dns"
+            return 0
+        fi
+    done
+
+    for prefix in "${NETWORK_IP_PREFIXES[@]:-}"; do
+        if ip addr 2>/dev/null | grep -q "inet ${prefix}"; then
+            log "INFO" "检测到匹配 IP 前缀: $prefix"
+            return 0
+        fi
+    done
+
+    for iface in "${NETWORK_INTERFACES[@]:-}"; do
+        if ip link show "$iface" >/dev/null 2>&1; then
+            log "INFO" "检测到匹配接口: $iface"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+check_network() {
+    if network_check_disabled; then
+        log "INFO" "NETWORK_MODE=always，跳过网络环境检测"
+        return 0
+    fi
+
+    log "INFO" "开始检测网络环境"
+
+    if [ "$OS_TYPE" = "macos" ]; then
+        check_network_macos && return 0
+    elif [ "$OS_TYPE" = "linux" ]; then
+        check_network_linux && return 0
+    fi
+
+    log "WARN" "当前网络环境未命中配置规则，跳过挂载"
+    return 1
+}
+
+is_mounted() {
+    local mount_point="$1"
+
+    if [ "$OS_TYPE" = "linux" ]; then
+        mountpoint -q "$mount_point"
+    else
+        mount | grep -q " on ${mount_point} "
+    fi
+}
+
+is_sshfs_mounted() {
+    local mount_point="$1"
+
+    if [ "$OS_TYPE" = "macos" ]; then
+        mount | grep -q "on ${mount_point} (macfuse\|osxfuse"
+    else
+        mount | grep -q "on ${mount_point} type fuse.sshfs"
+    fi
+}
+
+sshfs_options_for_entry() {
+    local name="$1"
+
+    if [ "$OS_TYPE" = "macos" ]; then
+        printf '%s' "reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,follow_symlinks,defer_permissions,volname=${name}"
+    else
+        printf '%s' "reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,follow_symlinks,allow_other,default_permissions"
+    fi
+}
+
+mount_entry() {
+    local config="$1"
+    local retry="${2:-0}"
+    local name user host remote_path local_path port options
+
+    IFS='|' read -r name user host remote_path local_path port <<<"$config"
+    local_path="$(expand_path "$local_path")"
+    port="${port:-22}"
+    options="$(sshfs_options_for_entry "$name")"
+
+    if is_sshfs_mounted "$local_path"; then
+        log "INFO" "[${name}] 已挂载: $local_path"
+        return 0
+    fi
+
+    mkdir -p "$local_path" || {
+        log "ERROR" "[${name}] 无法创建挂载点: $local_path"
+        return 1
+    }
+
+    log "INFO" "[${name}] 挂载 $user@$host:$remote_path -> $local_path"
+    if sshfs "${user}@${host}:${remote_path}" "$local_path" -p "$port" -o "$options" 2>>"$LOG_FILE"; then
+        log "INFO" "[${name}] 挂载成功"
+        return 0
+    fi
+
+    log "WARN" "[${name}] 挂载失败"
+    if [ "$retry" -lt "$MAX_RETRY" ]; then
+        retry=$((retry + 1))
+        log "INFO" "[${name}] ${RETRY_DELAY}s 后重试 (${retry}/${MAX_RETRY})"
+        sleep "$RETRY_DELAY"
+        mount_entry "$config" "$retry"
+        return $?
+    fi
+
+    log "ERROR" "[${name}] 重试后仍失败"
+    return 1
+}
+
+umount_entry() {
+    local config="$1"
+    local name user host remote_path local_path port
+
+    IFS='|' read -r name user host remote_path local_path port <<<"$config"
+    local_path="$(expand_path "$local_path")"
+
+    if ! is_mounted "$local_path"; then
+        log "INFO" "[${name}] 未挂载: $local_path"
+        return 0
+    fi
+
+    log "INFO" "[${name}] 卸载: $local_path"
+    if [ "$OS_TYPE" = "macos" ]; then
+        umount "$local_path" 2>>"$LOG_FILE" || umount -f "$local_path" 2>>"$LOG_FILE"
+    else
+        fusermount -u "$local_path" 2>>"$LOG_FILE" || fusermount -uz "$local_path" 2>>"$LOG_FILE"
+    fi
+
+    if is_mounted "$local_path"; then
+        log "ERROR" "[${name}] 卸载失败"
+        return 1
+    fi
+
+    log "INFO" "[${name}] 卸载成功"
+    return 0
+}
+
+mount_all() {
+    check_network || return 1
+
+    local config failed=0
+    for config in "${SSHFS_ENTRIES[@]:-}"; do
+        mount_entry "$config" || failed=1
+    done
+    return "$failed"
+}
+
+umount_all() {
+    local config failed=0
+    for config in "${SSHFS_ENTRIES[@]:-}"; do
+        umount_entry "$config" || failed=1
+    done
+    return "$failed"
+}
+
+find_entry() {
+    local target="$1"
+    local config name user host remote_path local_path port
+
+    for config in "${SSHFS_ENTRIES[@]:-}"; do
+        IFS='|' read -r name user host remote_path local_path port <<<"$config"
+        if [ "$name" = "$target" ]; then
+            printf '%s\n' "$config"
+            return 0
+        fi
+    done
+    return 1
+}
+
+mount_one() {
+    local target="$1"
+    local config
+
+    check_network || return 1
+    config="$(find_entry "$target")" || die "未找到配置: $target"
+    mount_entry "$config"
+}
+
+umount_one() {
+    local target="$1"
+    local config
+
+    config="$(find_entry "$target")" || die "未找到配置: $target"
+    umount_entry "$config"
+}
+
+auto_remount() {
+    check_network || return 1
+
+    local config name user host remote_path local_path port failed=0
+    for config in "${SSHFS_ENTRIES[@]:-}"; do
+        IFS='|' read -r name user host remote_path local_path port <<<"$config"
+        local_path="$(expand_path "$local_path")"
+        if ! is_sshfs_mounted "$local_path"; then
+            log "WARN" "[${name}] 未挂载，开始补挂载"
+            mount_entry "$config" || failed=1
+        fi
+    done
+    return "$failed"
+}
+
+show_status() {
+    local config name user host remote_path local_path port state
+
+    printf 'OS: %s\n' "$OS_TYPE"
+    printf 'Config: %s\n' "$CONFIG_FILE"
+    if check_network >/dev/null 2>&1; then
+        printf 'Network: matched\n'
+    else
+        printf 'Network: not matched\n'
+    fi
+    printf '\n'
+    printf '%-24s %-12s %-40s\n' "NAME" "STATUS" "MOUNTPOINT"
+    printf '%-24s %-12s %-40s\n' "------------------------" "------------" "----------------------------------------"
+
+    for config in "${SSHFS_ENTRIES[@]:-}"; do
+        IFS='|' read -r name user host remote_path local_path port <<<"$config"
+        local_path="$(expand_path "$local_path")"
+        if is_sshfs_mounted "$local_path"; then
+            state="mounted"
+        else
+            state="unmounted"
+        fi
+        printf '%-24s %-12s %-40s\n' "$name" "$state" "$local_path"
+    done
+}
+
+list_entries() {
+    local config name user host remote_path local_path port
+
+    for config in "${SSHFS_ENTRIES[@]:-}"; do
+        IFS='|' read -r name user host remote_path local_path port <<<"$config"
+        local_path="$(expand_path "$local_path")"
+        printf '%s -> %s@%s:%s => %s\n' "$name" "$user" "$host" "$remote_path" "$local_path"
+    done
+}
+
+init_config() {
+    local example_path="__INSTALL_PREFIX__/share/autosshfs/config.sh.example"
+
+    if [ ! -f "$example_path" ]; then
+        example_path="$(cd "$SCRIPT_DIR/.." && pwd)/share/autosshfs/config.sh.example"
+    fi
+
+    mkdir -p "$CONFIG_DIR"
+    if [ -f "$CONFIG_FILE" ]; then
+        printf '配置已存在: %s\n' "$CONFIG_FILE"
+        return 0
+    fi
+
+    cp "$example_path" "$CONFIG_FILE"
+    printf '已生成配置模板: %s\n' "$CONFIG_FILE"
+}
+
+show_help() {
+    cat <<EOF
+用法: ${APP_NAME} <command> [name]
+
+命令:
+  init-config     初始化配置模板到 ~/.config/autosshfs/config.sh
+  doctor          检查依赖、配置和网络条件
+  check           同 doctor
+  mount-all       挂载全部配置
+  umount-all      卸载全部配置
+  auto-remount    检查并补挂载未挂载项
+  mount <name>    按名称挂载
+  umount <name>   按名称卸载
+  status          显示状态
+  list            列出所有配置
+  help            显示帮助
+
+配置文件:
+  $CONFIG_FILE
+EOF
+}
+
+main() {
+    local cmd="${1:-help}"
+
+    case "$cmd" in
+        init-config)
+            init_config
+            ;;
+        doctor|check)
+            doctor
+            ;;
+        help|--help|-h)
+            show_help
+            ;;
+        *)
+            load_config
+            case "$cmd" in
+                mount)
+                    check_dependencies
+                    [ -n "${2:-}" ] || die "请指定 name"
+                    mount_one "$2"
+                    ;;
+                umount)
+                    check_dependencies
+                    [ -n "${2:-}" ] || die "请指定 name"
+                    umount_one "$2"
+                    ;;
+                mount-all|auto-remount|status|list)
+                    check_dependencies
+                    case "$cmd" in
+                        mount-all) mount_all ;;
+                        auto-remount) auto_remount ;;
+                        status) show_status ;;
+                        list) list_entries ;;
+                    esac
+                    ;;
+                umount-all)
+                    check_dependencies
+                    umount_all
+                    ;;
+                *)
+                    show_help
+                    exit 1
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+main "$@"
