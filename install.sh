@@ -9,6 +9,7 @@ BIN_DIR="$PREFIX/bin"
 SHARE_DIR="$PREFIX/share/$APP_NAME"
 OS="$(uname -s)"
 INSTALL_DEPS=0
+PURGE_CONFIG=0
 ACTION="install"
 REPO_BASE_URL="${AUTOSSHFS_REPO_BASE_URL:-$OFFICIAL_REPO_BASE_URL}"
 AUTH_HEADER="${AUTOSSHFS_AUTH_HEADER:-}"
@@ -26,16 +27,18 @@ init_script_dir() {
 
 usage() {
     cat <<EOF
-用法: ./install.sh [install|update|check|help] [--install-deps] [--prefix PATH] [--repo-base URL]
+用法: ./install.sh [install|update|uninstall|check|help] [--install-deps] [--prefix PATH] [--repo-base URL]
 
 命令:
   install         安装 autosshfs
   update          更新 autosshfs
+  uninstall       卸载 autosshfs
   check           检查依赖和安装状态
   help            显示帮助
 
 选项:
   --install-deps  尝试安装系统依赖
+  --purge-config  卸载时同时删除 ~/.config/autosshfs/config.sh
   --prefix PATH   指定安装前缀，默认: $HOME/.local
   --repo-base URL 指定远程 raw 基础地址，默认官方 GitHub 仓库
   --auth-header H 指定下载时附带的 HTTP Header，适用于私有仓库
@@ -144,6 +147,23 @@ print_next_steps() {
 EOF
 }
 
+uninstall_files() {
+    local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/$APP_NAME"
+    local config_file="$config_dir/config.sh"
+
+    rm -f "$BIN_DIR/$APP_NAME"
+    rm -f "$SHARE_DIR/config.sh.example"
+    rmdir "$SHARE_DIR" 2>/dev/null || true
+
+    if [ "$PURGE_CONFIG" -eq 1 ]; then
+        rm -f "$config_file"
+        rmdir "$config_dir" 2>/dev/null || true
+        log "已删除程序文件与用户配置"
+    else
+        log "已删除程序文件，保留用户配置"
+    fi
+}
+
 print_check() {
     printf '[check] %s\n' "$*"
 }
@@ -234,11 +254,14 @@ check_installation() {
 parse_args() {
     while [ $# -gt 0 ]; do
         case "$1" in
-            install|update|check|help)
+            install|update|uninstall|check|help)
                 ACTION="$1"
                 ;;
             --install-deps)
                 INSTALL_DEPS=1
+                ;;
+            --purge-config)
+                PURGE_CONFIG=1
                 ;;
             --prefix)
                 shift
@@ -306,6 +329,9 @@ main() {
     case "$ACTION" in
         install|update)
             run_install_or_update
+            ;;
+        uninstall)
+            uninstall_files
             ;;
         check)
             check_installation

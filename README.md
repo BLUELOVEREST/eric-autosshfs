@@ -48,6 +48,18 @@
 ./install.sh update
 ```
 
+如果你想卸载当前安装：
+
+```bash
+./install.sh uninstall
+```
+
+如果你连用户配置也要一起删除：
+
+```bash
+./install.sh uninstall --purge-config
+```
+
 如果你想通过远程 `curl` 安装，默认会使用这个 GitHub 仓库的 raw 地址继续下载 `bin/autosshfs` 和 `share/autosshfs/config.sh.example`。
 
 直接安装：
