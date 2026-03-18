@@ -7,7 +7,6 @@ OFFICIAL_REPO_BASE_URL="https://raw.githubusercontent.com/BLUELOVEREST/eric-auto
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
 SHARE_DIR="$PREFIX/share/$APP_NAME"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OS="$(uname -s)"
 INSTALL_DEPS=0
 ACTION="install"
@@ -15,6 +14,15 @@ REPO_BASE_URL="${AUTOSSHFS_REPO_BASE_URL:-$OFFICIAL_REPO_BASE_URL}"
 AUTH_HEADER="${AUTOSSHFS_AUTH_HEADER:-}"
 BINARY_SOURCE=""
 CONFIG_SOURCE=""
+SCRIPT_DIR=""
+
+init_script_dir() {
+    if [ "${BASH_SOURCE[0]:-}" != "" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    else
+        SCRIPT_DIR=""
+    fi
+}
 
 usage() {
     cat <<EOF
@@ -58,13 +66,18 @@ curl_fetch() {
 }
 
 resolve_sources() {
-    local local_bin="$SCRIPT_DIR/bin/$APP_NAME"
-    local local_config="$SCRIPT_DIR/share/$APP_NAME/config.sh.example"
+    local local_bin=""
+    local local_config=""
 
-    if [ -f "$local_bin" ] && [ -f "$local_config" ]; then
-        BINARY_SOURCE="$local_bin"
-        CONFIG_SOURCE="$local_config"
-        return 0
+    if [ -n "$SCRIPT_DIR" ]; then
+        local_bin="$SCRIPT_DIR/bin/$APP_NAME"
+        local_config="$SCRIPT_DIR/share/$APP_NAME/config.sh.example"
+
+        if [ -f "$local_bin" ] && [ -f "$local_config" ]; then
+            BINARY_SOURCE="$local_bin"
+            CONFIG_SOURCE="$local_config"
+            return 0
+        fi
     fi
 
     REPO_BASE_URL="${REPO_BASE_URL%/}"
@@ -287,6 +300,7 @@ run_install_or_update() {
 }
 
 main() {
+    init_script_dir
     parse_args "$@"
 
     case "$ACTION" in
