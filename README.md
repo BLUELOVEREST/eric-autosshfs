@@ -160,16 +160,47 @@ autosshfs init-config
 配置中的挂载项格式为：
 
 ```bash
-"名称|用户名|主机|远程路径|本地挂载点|端口"
+"名称(=SSH Host Alias)|远程路径"
 ```
 
 示例：
 
 ```bash
+MOUNT_BASE_DIR="$HOME/mount"
+
 SSHFS_ENTRIES=(
-  "signal-server-home|alice|signal-server|/home/alice|$HOME/mount/signal-server|22"
-  "signal-server-data|alice|signal-server|/data|$HOME/mount/signal-server-data|22"
+  "signal-server-home|/home/alice"
+  "signal-server-data|/data"
 )
+```
+
+这样会自动挂载到：
+
+```text
+$HOME/mount/signal-server-home
+$HOME/mount/signal-server-data
+```
+
+如果你想指定端口，也可以写成：
+
+```bash
+"signal-server-home|/home/alice|2222"
+```
+
+如果你想覆盖默认挂载目录：
+
+```bash
+"signal-server-home|/home/alice|$HOME/custom/path|22"
+```
+
+这要求你的 `~/.ssh/config` 里已经有对应的 `Host signal-server-home` 配置，`User`、`HostName`、`Port`、`IdentityFile` 等都由 SSH 自己解析。
+
+如果你暂时不想依赖 `~/.ssh/config`，仍然兼容旧格式：
+
+```bash
+"signal-server-home|alice|signal-server|/home/alice"
+"signal-server-home|alice|signal-server|/home/alice|2222"
+"signal-server-home|alice|signal-server|/home/alice|$HOME/custom/path|22"
 ```
 
 ## 命令

@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
 
-# 挂载项格式:
+# 默认挂载根目录。若条目未显式指定本地挂载点，则使用:
+#   \$MOUNT_BASE_DIR/<名称>
+MOUNT_BASE_DIR="$HOME/mount"
+
+# 挂载项格式，推荐使用 SSH Host Alias 简化写法:
+#   名称(=SSH Host Alias)|远程路径
+#   名称|远程路径|端口
+#   名称|远程路径|本地挂载点|端口
+#
+# 兼容旧写法:
+#   名称|用户名|主机|远程路径
+#   名称|用户名|主机|远程路径|端口
 #   名称|用户名|主机|远程路径|本地挂载点|端口
 SSHFS_ENTRIES=(
-    "signal-server-home|your-user|signal-server|/home/your-user|$HOME/mount/signal-server|22"
-    "signal-server-data|your-user|signal-server|/data|$HOME/mount/signal-server-data|22"
+    "signal-server-home|/home/your-user"
+    "signal-server-data|/data"
 )
 
 # 重试配置

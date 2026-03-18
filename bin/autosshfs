@@ -10,6 +10,7 @@ LOG_FILE="${AUTOSSHFS_LOG_FILE:-$LOG_DIR/${APP_NAME}.log}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 SSHFS_ENTRIES=()
+MOUNT_BASE_DIR="$HOME/mount"
 MAX_RETRY=3
 RETRY_DELAY=5
 NETWORK_MODE="always"
@@ -50,6 +51,63 @@ command_exists() {
 expand_path() {
     local raw_path="$1"
     eval "printf '%s\n' \"$raw_path\""
+}
+
+parse_sshfs_entry() {
+    local config="$1"
+    local name field2 field3 field4 field5 field6 user host remote_path resolved_local_path resolved_port
+
+    IFS='|' read -r name field2 field3 field4 field5 field6 <<<"$config"
+
+    if [[ "${field2:-}" == /* ]]; then
+        user=""
+        host="$name"
+        remote_path="$field2"
+
+        if [ -n "${field4:-}" ]; then
+            resolved_local_path="$field3"
+            resolved_port="$field4"
+        elif [ -n "${field3:-}" ]; then
+            if [[ "$field3" =~ ^[0-9]+$ ]]; then
+                resolved_local_path="${MOUNT_BASE_DIR}/${name}"
+                resolved_port="$field3"
+            else
+                resolved_local_path="$field3"
+                resolved_port="22"
+            fi
+        else
+            resolved_local_path="${MOUNT_BASE_DIR}/${name}"
+            resolved_port="22"
+        fi
+    else
+        user="$field2"
+        host="$field3"
+        remote_path="$field4"
+
+        if [ -n "${field6:-}" ]; then
+            resolved_local_path="$field5"
+            resolved_port="$field6"
+        elif [ -n "${field5:-}" ]; then
+            if [[ "$field5" =~ ^[0-9]+$ ]]; then
+                resolved_local_path="${MOUNT_BASE_DIR}/${name}"
+                resolved_port="$field5"
+            else
+                resolved_local_path="$field5"
+                resolved_port="22"
+            fi
+        else
+            resolved_local_path="${MOUNT_BASE_DIR}/${name}"
+            resolved_port="22"
+        fi
+    fi
+
+    printf '%s|%s|%s|%s|%s|%s\n' \
+        "$name" \
+        "$user" \
+        "$host" \
+        "$remote_path" \
+        "$(expand_path "$resolved_local_path")" \
+        "$resolved_port"
 }
 
 load_config() {
@@ -106,7 +164,11 @@ print_entry_header() {
 ssh_target() {
     local user="$1"
     local host="$2"
-    printf '%s@%s' "$user" "$host"
+    if [ -n "$user" ]; then
+        printf '%s@%s' "$user" "$host"
+    else
+        printf '%s' "$host"
+    fi
 }
 
 analyze_ssh_error() {
@@ -274,7 +336,7 @@ doctor_network() {
 }
 
 doctor_entries() {
-    local config name user host remote_path local_path port failed=0
+    local config parsed name user host remote_path local_path port failed=0
 
     if [ ! -f "$CONFIG_FILE" ]; then
         return 0
@@ -294,9 +356,8 @@ doctor_entries() {
     printf 'SSH Entry Checks:\n'
 
     for config in "${SSHFS_ENTRIES[@]:-}"; do
-        IFS='|' read -r name user host remote_path local_path port <<<"$config"
-        local_path="$(expand_path "$local_path")"
-        port="${port:-22}"
+        parsed="$(parse_sshfs_entry "$config")"
+        IFS='|' read -r name user host remote_path local_path port <<<"$parsed"
 
         print_entry_header "$name"
         print_info "Target: $(ssh_target "$user" "$host"):$port"
@@ -470,11 +531,10 @@ sshfs_options_for_entry() {
 mount_entry() {
     local config="$1"
     local retry="${2:-0}"
-    local name user host remote_path local_path port options target
+    local parsed name user host remote_path local_path port options target
 
-    IFS='|' read -r name user host remote_path local_path port <<<"$config"
-    local_path="$(expand_path "$local_path")"
-    port="${port:-22}"
+    parsed="$(parse_sshfs_entry "$config")"
+    IFS='|' read -r name user host remote_path local_path port <<<"$parsed"
     options="$(sshfs_options_for_entry "$name")"
     target="$(ssh_target "$user" "$host")"
 
@@ -519,10 +579,10 @@ mount_entry() {
 
 umount_entry() {
     local config="$1"
-    local name user host remote_path local_path port
+    local parsed name user host remote_path local_path port
 
-    IFS='|' read -r name user host remote_path local_path port <<<"$config"
-    local_path="$(expand_path "$local_path")"
+    parsed="$(parse_sshfs_entry "$config")"
+    IFS='|' read -r name user host remote_path local_path port <<<"$parsed"
 
     if ! is_mounted "$local_path"; then
         log "INFO" "[${name}] 未挂载: $local_path"
@@ -597,10 +657,10 @@ umount_one() {
 auto_remount() {
     check_network || return 1
 
-    local config name user host remote_path local_path port failed=0
+    local config parsed name user host remote_path local_path port failed=0
     for config in "${SSHFS_ENTRIES[@]:-}"; do
-        IFS='|' read -r name user host remote_path local_path port <<<"$config"
-        local_path="$(expand_path "$local_path")"
+        parsed="$(parse_sshfs_entry "$config")"
+        IFS='|' read -r name user host remote_path local_path port <<<"$parsed"
         if ! is_sshfs_mounted "$local_path"; then
             log "WARN" "[${name}] 未挂载，开始补挂载"
             mount_entry "$config" || failed=1
@@ -610,7 +670,7 @@ auto_remount() {
 }
 
 show_status() {
-    local config name user host remote_path local_path port state
+    local config parsed name user host remote_path local_path port state
 
     printf 'OS: %s\n' "$OS_TYPE"
     printf 'Config: %s\n' "$CONFIG_FILE"
@@ -624,8 +684,8 @@ show_status() {
     printf '%-24s %-12s %-40s\n' "------------------------" "------------" "----------------------------------------"
 
     for config in "${SSHFS_ENTRIES[@]:-}"; do
-        IFS='|' read -r name user host remote_path local_path port <<<"$config"
-        local_path="$(expand_path "$local_path")"
+        parsed="$(parse_sshfs_entry "$config")"
+        IFS='|' read -r name user host remote_path local_path port <<<"$parsed"
         if is_sshfs_mounted "$local_path"; then
             state="mounted"
         else
@@ -636,12 +696,12 @@ show_status() {
 }
 
 list_entries() {
-    local config name user host remote_path local_path port
+    local config parsed name user host remote_path local_path port
 
     for config in "${SSHFS_ENTRIES[@]:-}"; do
-        IFS='|' read -r name user host remote_path local_path port <<<"$config"
-        local_path="$(expand_path "$local_path")"
-        printf '%s -> %s@%s:%s => %s\n' "$name" "$user" "$host" "$remote_path" "$local_path"
+        parsed="$(parse_sshfs_entry "$config")"
+        IFS='|' read -r name user host remote_path local_path port <<<"$parsed"
+        printf '%s -> %s:%s => %s\n' "$name" "$(ssh_target "$user" "$host")" "$remote_path" "$local_path"
     done
 }
 
