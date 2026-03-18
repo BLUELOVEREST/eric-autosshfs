@@ -48,15 +48,29 @@
 ./install.sh update
 ```
 
-如果你想通过远程 `curl` 安装，安装脚本本身必须能继续下载仓库里的 `bin/autosshfs` 和 `share/autosshfs/config.sh.example`。因此远程模式需要提供仓库的 raw 基础地址。
+如果你想通过远程 `curl` 安装，默认会使用这个 GitHub 仓库的 raw 地址继续下载 `bin/autosshfs` 和 `share/autosshfs/config.sh.example`。
 
-公开仓库示例：
+直接安装：
 
 ```bash
-curl -fsSL <raw-base-url>/install.sh | bash -s -- install --repo-base <raw-base-url>
+curl -fsSL https://raw.githubusercontent.com/BLUELOVEREST/eric-autosshfs/main/install.sh | bash -s -- install
 ```
 
-私有仓库示例：
+直接更新：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BLUELOVEREST/eric-autosshfs/main/install.sh | bash -s -- update
+```
+
+如果你想指定其他分支、tag 或 fork，可以显式传 `--repo-base`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BLUELOVEREST/eric-autosshfs/main/install.sh | \
+  bash -s -- install \
+    --repo-base https://raw.githubusercontent.com/BLUELOVEREST/eric-autosshfs/main
+```
+
+如果你以后改回私有仓库，也可以继续用认证头：
 
 ```bash
 export AUTOSSHFS_AUTH_HEADER='Authorization: token <your-token>'

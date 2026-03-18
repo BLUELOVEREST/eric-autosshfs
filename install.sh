@@ -3,6 +3,7 @@
 set -euo pipefail
 
 APP_NAME="autosshfs"
+OFFICIAL_REPO_BASE_URL="https://raw.githubusercontent.com/BLUELOVEREST/eric-autosshfs/main"
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
 SHARE_DIR="$PREFIX/share/$APP_NAME"
@@ -10,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OS="$(uname -s)"
 INSTALL_DEPS=0
 ACTION="install"
-REPO_BASE_URL="${AUTOSSHFS_REPO_BASE_URL:-}"
+REPO_BASE_URL="${AUTOSSHFS_REPO_BASE_URL:-$OFFICIAL_REPO_BASE_URL}"
 AUTH_HEADER="${AUTOSSHFS_AUTH_HEADER:-}"
 BINARY_SOURCE=""
 CONFIG_SOURCE=""
@@ -28,7 +29,7 @@ usage() {
 选项:
   --install-deps  尝试安装系统依赖
   --prefix PATH   指定安装前缀，默认: $HOME/.local
-  --repo-base URL 指定远程 raw 基础地址，用于 curl 远程安装
+  --repo-base URL 指定远程 raw 基础地址，默认官方 GitHub 仓库
   --auth-header H 指定下载时附带的 HTTP Header，适用于私有仓库
 EOF
 }
@@ -64,11 +65,6 @@ resolve_sources() {
         BINARY_SOURCE="$local_bin"
         CONFIG_SOURCE="$local_config"
         return 0
-    fi
-
-    if [ -z "$REPO_BASE_URL" ]; then
-        log "当前为远程安装模式，但未提供 --repo-base 或 AUTOSSHFS_REPO_BASE_URL"
-        exit 1
     fi
 
     REPO_BASE_URL="${REPO_BASE_URL%/}"
