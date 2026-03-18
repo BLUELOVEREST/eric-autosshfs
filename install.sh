@@ -142,7 +142,23 @@ print_next_steps() {
 1. 确认 $BIN_DIR 已在 PATH 中
 2. 执行: $APP_NAME init-config
 3. 编辑: ~/.config/$APP_NAME/config.sh
-4. 执行: $APP_NAME mount-all
+4. 确认每个目标主机已完成 SSH 免密登录配置，并且能手工执行: ssh <host>
+5. 执行: $APP_NAME doctor
+6. 执行: $APP_NAME mount-all
+
+如果后续启用 systemd --user 定时巡检，建议按这个顺序验证:
+1. 先完成上面的 init-config / SSH 免密 / doctor
+2. 执行: systemctl --user daemon-reload
+3. 执行: systemctl --user enable --now autosshfs.timer
+4. 执行: systemctl --user status autosshfs.timer --no-pager
+5. 执行: systemctl --user start autosshfs.service
+6. 执行: systemctl --user status autosshfs.service --no-pager
+7. 执行: journalctl --user -u autosshfs.service -n 50 --no-pager
+
+需要额外关注:
+- systemctl --user 是否可用
+- SSH_AUTH_SOCK 在 user session 中是否可见
+- ssh-add -l 是否能看到用于目标主机的私钥
 
 EOF
 }

@@ -98,6 +98,53 @@ curl -fsSL -H "$AUTOSSHFS_AUTH_HEADER" <raw-base-url>/install.sh | \
 <raw-base-url>/share/autosshfs/config.sh.example
 ```
 
+## 配置与验证顺序
+
+建议按下面顺序做，而不是装完就直接挂载：
+
+1. 初始化配置
+
+```bash
+autosshfs init-config
+```
+
+2. 编辑 `~/.config/autosshfs/config.sh`
+3. 确认每个目标主机已经配置好 SSH 免密登录，并且你可以手工执行：
+
+```bash
+ssh <host>
+```
+
+4. 运行诊断：
+
+```bash
+autosshfs doctor
+```
+
+5. 诊断通过后再挂载：
+
+```bash
+autosshfs mount-all
+```
+
+如果你后续启用 `systemd --user` 定时自动补挂载，不建议跳过上面这些前置步骤。至少要先保证：
+
+- `autosshfs doctor` 已通过关键检查
+- `ssh-add -l` 能看到对应私钥
+- `systemctl --user` 可用
+- `SSH_AUTH_SOCK` 在用户 session 中可见
+
+启用后建议执行这些验证命令：
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now autosshfs.timer
+systemctl --user status autosshfs.timer --no-pager
+systemctl --user start autosshfs.service
+systemctl --user status autosshfs.service --no-pager
+journalctl --user -u autosshfs.service -n 50 --no-pager
+```
+
 ## 初始化配置
 
 ```bash
