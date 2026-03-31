@@ -54,3 +54,6 @@ NETWORK_SSIDS=(
 # 如需额外选项，可写成:
 # MACOS_SSHFS_EXTRA_OPTIONS="nolocalcaches"
 MACOS_SSHFS_EXTRA_OPTIONS=""
+
+# 调试开关。设为 1 后会输出更详细的 sshfs/ssh_command 信息。
+SSHFS_DEBUG=0

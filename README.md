@@ -257,6 +257,7 @@ brew install gromgit/fuse/sshfs-mac
 
 - `autosshfs` 默认会为 macOS 挂载追加 `noappledouble,noapplexattr`，尽量避免在 Linux 侧看到 `._*` 文件
 - 如果你还想补充其他 macOS 挂载参数，可以在配置里设置 `MACOS_SSHFS_EXTRA_OPTIONS`
+- 如果你要排查挂载问题，可以在配置里设置 `SSHFS_DEBUG=1`
 - 建议先运行：
 
 ```bash
