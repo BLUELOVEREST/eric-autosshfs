@@ -160,7 +160,7 @@ autosshfs init-config
 配置中的挂载项格式为：
 
 ```bash
-"名称(=SSH Host Alias)|远程路径"
+"名称|用户名|主机|远程路径|本地挂载点|端口"
 ```
 
 示例：
@@ -169,8 +169,8 @@ autosshfs init-config
 MOUNT_BASE_DIR="$HOME/mount"
 
 SSHFS_ENTRIES=(
-  "signal-server-home|/home/alice"
-  "signal-server-data|/data"
+  "signal-server-home|alice|signal-server|/home/alice"
+  "signal-server-data|alice|signal-server|/data"
 )
 ```
 
@@ -184,26 +184,24 @@ $HOME/mount/signal-server-data
 如果你想指定端口，也可以写成：
 
 ```bash
-"signal-server-home|/home/alice|2222"
+"signal-server-home|alice|signal-server|/home/alice|2222"
 ```
 
 如果你想覆盖默认挂载目录：
 
 ```bash
-"signal-server-home|/home/alice|$HOME/custom/path|22"
-```
-
-这要求你的 `~/.ssh/config` 里已经有对应的 `Host signal-server-home` 配置，`User`、`HostName`、`Port`、`IdentityFile` 等都由 SSH 自己解析。
-
-`autosshfs` 在预检查和 `sshfs` 挂载时会主动使用非交互 SSH 选项，尽量绕过 `RemoteCommand`、`RequestTTY`、自动进 shell/tmux 等只适合手工登录的配置。
-
-如果你暂时不想依赖 `~/.ssh/config`，仍然兼容旧格式：
-
-```bash
-"signal-server-home|alice|signal-server|/home/alice"
-"signal-server-home|alice|signal-server|/home/alice|2222"
 "signal-server-home|alice|signal-server|/home/alice|$HOME/custom/path|22"
 ```
+
+这里的 `主机` 字段可以直接写 `~/.ssh/config` 里的 Host alias，例如 `zhangzc11-c1`。如果你这样写：
+
+```bash
+"zhangzc11-c1|root|zhangzc11-c1|/dataset/workspace/zhangzhicheng"
+```
+
+那么 `User` 仍然显式写在配置里，而 `HostName`、`ProxyJump`、`IdentityFile`、未显式填写的 `Port` 等，仍可继续由 `~/.ssh/config` 提供。
+
+`autosshfs` 在预检查和 `sshfs` 挂载时会主动使用非交互 SSH 选项，尽量绕过 `RemoteCommand`、`RequestTTY`、自动进 shell/tmux 等只适合手工登录的配置。
 
 ## 命令
 

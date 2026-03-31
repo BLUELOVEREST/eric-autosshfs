@@ -62,50 +62,28 @@ expand_path() {
 
 parse_sshfs_entry() {
     local config="$1"
-    local name field2 field3 field4 field5 field6 user host remote_path resolved_local_path resolved_port
+    local name user host remote_path field5 field6 resolved_local_path resolved_port
 
-    IFS='|' read -r name field2 field3 field4 field5 field6 <<<"$config"
+    IFS='|' read -r name user host remote_path field5 field6 <<<"$config"
 
-    if [[ "${field2:-}" == /* ]]; then
-        user=""
-        host="$name"
-        remote_path="$field2"
+    if [ -z "${name:-}" ] || [ -z "${user:-}" ] || [ -z "${host:-}" ] || [ -z "${remote_path:-}" ]; then
+        die "无效的 SSHFS_ENTRIES 配置: $config。格式必须为 名称|用户名|主机|远程路径|本地挂载点|端口，其中前四项必填"
+    fi
 
-        if [ -n "${field4:-}" ]; then
-            resolved_local_path="$field3"
-            resolved_port="$field4"
-        elif [ -n "${field3:-}" ]; then
-            if [[ "$field3" =~ ^[0-9]+$ ]]; then
-                resolved_local_path="${MOUNT_BASE_DIR}/${name}"
-                resolved_port="$field3"
-            else
-                resolved_local_path="$field3"
-                resolved_port="22"
-            fi
-        else
+    if [ -n "${field6:-}" ]; then
+        resolved_local_path="$field5"
+        resolved_port="$field6"
+    elif [ -n "${field5:-}" ]; then
+        if [[ "$field5" =~ ^[0-9]+$ ]]; then
             resolved_local_path="${MOUNT_BASE_DIR}/${name}"
-            resolved_port="22"
+            resolved_port="$field5"
+        else
+            resolved_local_path="$field5"
+            resolved_port=""
         fi
     else
-        user="$field2"
-        host="$field3"
-        remote_path="$field4"
-
-        if [ -n "${field6:-}" ]; then
-            resolved_local_path="$field5"
-            resolved_port="$field6"
-        elif [ -n "${field5:-}" ]; then
-            if [[ "$field5" =~ ^[0-9]+$ ]]; then
-                resolved_local_path="${MOUNT_BASE_DIR}/${name}"
-                resolved_port="$field5"
-            else
-                resolved_local_path="$field5"
-                resolved_port="22"
-            fi
-        else
-            resolved_local_path="${MOUNT_BASE_DIR}/${name}"
-            resolved_port="22"
-        fi
+        resolved_local_path="${MOUNT_BASE_DIR}/${name}"
+        resolved_port=""
     fi
 
     printf '%s|%s|%s|%s|%s|%s\n' \
@@ -178,10 +156,6 @@ ssh_target() {
     fi
 }
 
-ssh_base_options() {
-    printf '%s' "-T -x -o RequestTTY=no -o RemoteCommand=none -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new"
-}
-
 sshfs_ssh_command() {
     printf '%s' "ssh -T -x -o RequestTTY=no -o RemoteCommand=none -o ClearAllForwardings=yes -o StrictHostKeyChecking=accept-new"
 }
@@ -205,7 +179,7 @@ ssh_config_check() {
             -F "${HOME}/.ssh/config" \
             -o BatchMode=yes \
             -o ConnectTimeout=5 \
-            -p "$port" \
+            ${port:+-p "$port"} \
             "$target" 2>&1
     )"
     rc=$?
@@ -567,7 +541,11 @@ mount_entry() {
 
     log "INFO" "[${name}] 挂载目标: ${target}:${remote_path}"
     log "INFO" "[${name}] 本地挂载点: $local_path"
-    log "INFO" "[${name}] 端口: $port"
+    if [ -n "$port" ]; then
+        log "INFO" "[${name}] 端口: $port"
+    else
+        log "INFO" "[${name}] 端口: 由 ~/.ssh/config 或 ssh 默认值解析"
+    fi
     debug_log "[${name}] sshfs options: $options"
     debug_log "[${name}] ssh_command: $ssh_cmd"
 
@@ -577,8 +555,12 @@ mount_entry() {
 
     log "INFO" "[${name}] 开始执行 sshfs"
     sshfs_stderr_file="$(mktemp "${TMPDIR:-/tmp}/autosshfs-${name}.XXXXXX.log")"
-    debug_log "[${name}] sshfs command: sshfs '${target}:${remote_path}' '${local_path}' -p '${port}' -o '${options}' -o 'ssh_command=${ssh_cmd}'"
-    if sshfs "${target}:${remote_path}" "$local_path" -p "$port" -o "$options" -o "ssh_command=${ssh_cmd}" 2>>"$sshfs_stderr_file"; then
+    if [ -n "$port" ]; then
+        debug_log "[${name}] sshfs command: sshfs '${target}:${remote_path}' '${local_path}' -p '${port}' -o '${options}' -o 'ssh_command=${ssh_cmd}'"
+    else
+        debug_log "[${name}] sshfs command: sshfs '${target}:${remote_path}' '${local_path}' -o '${options}' -o 'ssh_command=${ssh_cmd}'"
+    fi
+    if sshfs "${target}:${remote_path}" "$local_path" ${port:+-p "$port"} -o "$options" -o "ssh_command=${ssh_cmd}" 2>>"$sshfs_stderr_file"; then
         if is_sshfs_mounted "$local_path"; then
             if [ "${SSHFS_DEBUG:-0}" = "1" ] && [ -s "$sshfs_stderr_file" ]; then
                 while IFS= read -r line; do
@@ -602,8 +584,13 @@ mount_entry() {
     rm -f "$sshfs_stderr_file"
 
     log "WARN" "[${name}] sshfs 挂载失败"
-    log "WARN" "[${name}] 可先手工验证: ssh -p ${port} ${target}"
-    log "WARN" "[${name}] 若 SSH 正常，再手工验证: sshfs ${target}:${remote_path} ${local_path} -p ${port}"
+    if [ -n "$port" ]; then
+        log "WARN" "[${name}] 可先手工验证: ssh -p ${port} ${target}"
+        log "WARN" "[${name}] 若 SSH 正常，再手工验证: sshfs ${target}:${remote_path} ${local_path} -p ${port}"
+    else
+        log "WARN" "[${name}] 可先手工验证: ssh ${target}"
+        log "WARN" "[${name}] 若 SSH 正常，再手工验证: sshfs ${target}:${remote_path} ${local_path}"
+    fi
     if [ "$retry" -lt "$MAX_RETRY" ]; then
         retry=$((retry + 1))
         log "INFO" "[${name}] ${RETRY_DELAY}s 后重试 (${retry}/${MAX_RETRY})"

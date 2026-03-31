@@ -4,18 +4,16 @@
 #   \$MOUNT_BASE_DIR/<名称>
 MOUNT_BASE_DIR="$HOME/mount"
 
-# 挂载项格式，推荐使用 SSH Host Alias 简化写法:
-#   名称(=SSH Host Alias)|远程路径
-#   名称|远程路径|端口
-#   名称|远程路径|本地挂载点|端口
-#
-# 兼容旧写法:
-#   名称|用户名|主机|远程路径
-#   名称|用户名|主机|远程路径|端口
+# 挂载项统一格式:
 #   名称|用户名|主机|远程路径|本地挂载点|端口
+#
+# 规则:
+#   - 前四项必填: 名称、用户名、主机、远程路径
+#   - 本地挂载点可选，不填时默认使用: $MOUNT_BASE_DIR/<名称>
+#   - 端口可选，不填时交给 ~/.ssh/config 或 ssh 默认值解析
 SSHFS_ENTRIES=(
-    "signal-server-home|/home/your-user"
-    "signal-server-data|/data"
+    "signal-server-home|your-user|signal-server|/home/your-user"
+    "signal-server-data|your-user|signal-server|/data|$HOME/mount/signal-server-data"
 )
 
 # 重试配置
