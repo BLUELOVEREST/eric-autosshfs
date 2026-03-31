@@ -48,3 +48,9 @@ NETWORK_INTERFACES=(
 NETWORK_SSIDS=(
     "XP-OFFICE-WORK"
 )
+
+# macOS 下额外追加的 sshfs 选项。
+# 默认已启用 noappledouble,noapplexattr 来避免生成 ._ 开头的文件。
+# 如需额外选项，可写成:
+# MACOS_SSHFS_EXTRA_OPTIONS="nolocalcaches"
+MACOS_SSHFS_EXTRA_OPTIONS=""

@@ -19,6 +19,7 @@ NETWORK_DNS=()
 NETWORK_IP_PREFIXES=()
 NETWORK_INTERFACES=()
 NETWORK_SSIDS=()
+MACOS_SSHFS_EXTRA_OPTIONS=""
 
 detect_os() {
     case "${OSTYPE:-}" in
@@ -512,17 +513,24 @@ is_sshfs_mounted() {
     local mount_point="$1"
 
     if [ "$OS_TYPE" = "macos" ]; then
-        mount | grep -q "on ${mount_point} (macfuse\|osxfuse"
+        mount | grep -E -q "on ${mount_point} \((macfuse|osxfuse|sshfs)"
     else
         mount | grep -q "on ${mount_point} type fuse.sshfs"
     fi
+}
+
+mountpoint_has_local_residue() {
+    local mount_point="$1"
+
+    [ -d "$mount_point" ] || return 1
+    [ -n "$(find "$mount_point" -mindepth 1 -maxdepth 1 2>/dev/null | head -n 1)" ]
 }
 
 sshfs_options_for_entry() {
     local name="$1"
 
     if [ "$OS_TYPE" = "macos" ]; then
-        printf '%s' "reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,follow_symlinks,defer_permissions,volname=${name}"
+        printf '%s' "reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,follow_symlinks,defer_permissions,noappledouble,noapplexattr,volname=${name}${MACOS_SSHFS_EXTRA_OPTIONS:+,${MACOS_SSHFS_EXTRA_OPTIONS}}"
     else
         printf '%s' "reconnect,ServerAliveInterval=15,ServerAliveCountMax=3,follow_symlinks,allow_other,default_permissions"
     fi
@@ -548,6 +556,11 @@ mount_entry() {
         return 1
     }
 
+    if mountpoint_has_local_residue "$local_path"; then
+        log "WARN" "[${name}] 挂载点目录当前包含本地残留内容: $local_path"
+        log "WARN" "[${name}] 如果这是上次异常卸载后的残留，请先确认未挂载，再清理目录内容"
+    fi
+
     log "INFO" "[${name}] 挂载目标: ${target}:${remote_path}"
     log "INFO" "[${name}] 本地挂载点: $local_path"
     log "INFO" "[${name}] 端口: $port"
@@ -558,8 +571,13 @@ mount_entry() {
 
     log "INFO" "[${name}] 开始执行 sshfs"
     if sshfs "${target}:${remote_path}" "$local_path" -p "$port" -o "$options" 2>>"$LOG_FILE"; then
-        log "INFO" "[${name}] 挂载成功"
-        return 0
+        if is_sshfs_mounted "$local_path"; then
+            log "INFO" "[${name}] 挂载成功"
+            return 0
+        fi
+
+        log "ERROR" "[${name}] sshfs 命令返回成功，但挂载点未处于 sshfs 挂载状态"
+        log "ERROR" "[${name}] 请检查 $local_path 是否存在残留目录内容、系统弹窗授权、或 macFUSE/sshfs 异常"
     fi
 
     log "WARN" "[${name}] sshfs 挂载失败"
