@@ -49,6 +49,73 @@ log() {
     printf '[install] %s\n' "$*"
 }
 
+path_contains() {
+    local target="$1"
+    case ":$PATH:" in
+        *":$target:"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+append_local_bin_to_zshrc() {
+    local zshrc="$HOME/.zshrc"
+    local path_line='export PATH="$HOME/.local/bin:$PATH"'
+
+    touch "$zshrc"
+    if grep -Fq "$path_line" "$zshrc" 2>/dev/null; then
+        log "~/.zshrc 中已包含 ~/.local/bin 的 PATH 配置"
+        return 0
+    fi
+
+    {
+        printf '\n'
+        printf '# Added by autosshfs installer\n'
+        printf '%s\n' "$path_line"
+    } >>"$zshrc"
+
+    log "已将 ~/.local/bin 添加到 $zshrc"
+    log "请重新打开终端，或执行: source $zshrc"
+}
+
+ensure_local_bin_in_path() {
+    local target_bin="$HOME/.local/bin"
+    local reply=""
+
+    [ "$PREFIX" = "$HOME/.local" ] || return 0
+
+    if path_contains "$target_bin"; then
+        log "检测到 PATH 已包含 $target_bin"
+        return 0
+    fi
+
+    log "检测到当前 PATH 未包含 $target_bin"
+
+    if [ ! -t 1 ] || [ ! -r /dev/tty ]; then
+        log "当前不是交互式终端，跳过 PATH 写入提示"
+        log "如需手动添加，请在 ~/.zshrc 中加入: export PATH=\"\$HOME/.local/bin:\$PATH\""
+        return 0
+    fi
+
+    while true; do
+        printf 'Do you want to add %s to your PATH in ~/.zshrc? [y/n] ' "$target_bin" >/dev/tty
+        IFS= read -r reply </dev/tty || break
+        case "$reply" in
+            y|Y|yes|YES)
+                append_local_bin_to_zshrc
+                break
+                ;;
+            n|N|no|NO)
+                log "已跳过 PATH 配置写入"
+                log "如需手动添加，请在 ~/.zshrc 中加入: export PATH=\"\$HOME/.local/bin:\$PATH\""
+                break
+                ;;
+            *)
+                printf 'Please answer y or n.\n' >/dev/tty
+                ;;
+        esac
+    done
+}
+
 command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
@@ -335,6 +402,7 @@ run_install_or_update() {
     fi
 
     install_files
+    ensure_local_bin_in_path
     print_next_steps
 }
 
