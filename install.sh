@@ -202,19 +202,34 @@ install_files() {
     log "已安装到 $BIN_DIR/$APP_NAME"
 }
 
+ensure_user_config() {
+    local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/$APP_NAME"
+    local config_file="$config_dir/config.sh"
+
+    mkdir -p "$config_dir"
+    if [ -f "$config_file" ]; then
+        log "检测到现有配置，保留不覆盖: $config_file"
+        return 0
+    fi
+
+    cp "$SHARE_DIR/config.sh.example" "$config_file"
+    log "已初始化配置文件: $config_file"
+}
+
 print_next_steps() {
+    local config_file="${XDG_CONFIG_HOME:-$HOME/.config}/$APP_NAME/config.sh"
+
     cat <<EOF
 
 后续步骤:
 1. 确认 $BIN_DIR 已在 PATH 中
-2. 执行: $APP_NAME init-config
-3. 编辑: ~/.config/$APP_NAME/config.sh
-4. 确认每个目标主机已完成 SSH 免密登录配置，并且能手工执行: ssh <host>
-5. 执行: $APP_NAME doctor
-6. 执行: $APP_NAME mount-all
+2. 修改配置文件: $config_file
+3. 确认每个目标主机已完成 SSH 免密登录配置，并且能手工执行: ssh <host>
+4. 执行: $APP_NAME doctor
+5. 执行: $APP_NAME mount-all
 
 如果后续启用 systemd --user 定时巡检，建议按这个顺序验证:
-1. 先完成上面的 init-config / SSH 免密 / doctor
+1. 先完成上面的配置修改 / SSH 免密 / doctor
 2. 执行: systemctl --user daemon-reload
 3. 执行: systemctl --user enable --now autosshfs.timer
 4. 执行: systemctl --user status autosshfs.timer --no-pager
@@ -402,6 +417,7 @@ run_install_or_update() {
     fi
 
     install_files
+    ensure_user_config
     ensure_local_bin_in_path
     print_next_steps
 }
