@@ -225,6 +225,7 @@ autosshfs list
 - `sshfs`、`fusermount`、`mountpoint` 等依赖
 - macOS 上 `macFUSE` 是否看起来已安装
 - 当前网络是否命中配置规则
+- 每个挂载项对应的 SSH 配置是否能被本地 `ssh` 正确解析
 
 ## 网络匹配
 

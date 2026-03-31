@@ -180,71 +180,51 @@ sshfs_ssh_command() {
     printf '%s' "ssh -T -x -o RequestTTY=no -o RemoteCommand=none -o ClearAllForwardings=yes -o StrictHostKeyChecking=accept-new"
 }
 
-analyze_ssh_error() {
-    local output="$1"
-
-    case "$output" in
-        *"Permission denied (publickey)"*)
-            printf '%s\n' "SSH 免密认证失败，请检查私钥、ssh-agent 和远端 authorized_keys"
-            ;;
-        *"Could not resolve hostname"*)
-            printf '%s\n' "SSH 主机名无法解析，请检查 ~/.ssh/config 中的 Host 别名或 DNS"
-            ;;
-        *"Connection timed out"*)
-            printf '%s\n' "SSH 连接超时，请检查网络、VPN 或安全组"
-            ;;
-        *"Connection refused"*)
-            printf '%s\n' "SSH 连接被拒绝，请检查端口和 sshd 服务"
-            ;;
-        *"No route to host"*)
-            printf '%s\n' "无法路由到目标主机，请检查网络或网关"
-            ;;
-        *"Host key verification failed"*)
-            printf '%s\n' "SSH 主机指纹校验失败，请检查 ~/.ssh/known_hosts"
-            ;;
-        *)
-            printf '%s\n' "SSH 预检失败，请先手工执行 ssh 命令定位问题"
-            ;;
-    esac
-}
-
-ssh_preflight_check() {
+ssh_config_check() {
     local name="$1"
     local user="$2"
     local host="$3"
     local port="$4"
     local mode="${5:-doctor}"
-    local target output rc
+    local target output rc resolved_user resolved_host resolved_port
 
     target="$(ssh_target "$user" "$host")"
     output="$(
         ssh \
-            -T \
-            -x \
-            -o RequestTTY=no \
-            -o RemoteCommand=none \
-            -o ClearAllForwardings=yes \
+            -G \
+            -F "${HOME}/.ssh/config" \
             -o BatchMode=yes \
             -o ConnectTimeout=5 \
-            -o StrictHostKeyChecking=accept-new \
             -p "$port" \
-            "$target" \
-            exit 2>&1
+            "$target" 2>&1
     )"
     rc=$?
 
     if [ "$rc" -eq 0 ]; then
-        [ "$mode" = "doctor" ] && print_ok "[${name}] SSH 免密连通正常: ${target}:${port}"
+        resolved_user="$(printf '%s\n' "$output" | awk '/^user / {print $2; exit}')"
+        resolved_host="$(printf '%s\n' "$output" | awk '/^hostname / {print $2; exit}')"
+        resolved_port="$(printf '%s\n' "$output" | awk '/^port / {print $2; exit}')"
+
+        if [ "$mode" = "doctor" ]; then
+            print_ok "[${name}] SSH 配置解析正常: ${target}"
+            [ -n "$resolved_user" ] && print_info "[${name}] Resolved User: $resolved_user"
+            [ -n "$resolved_host" ] && print_info "[${name}] Resolved HostName: $resolved_host"
+            [ -n "$resolved_port" ] && print_info "[${name}] Resolved Port: $resolved_port"
+            print_info "[${name}] 如需验证免密登录，请手工执行: ssh ${target}"
+        else
+            log "INFO" "[${name}] SSH 配置解析正常: ${target}"
+            [ -n "$resolved_user" ] && log "INFO" "[${name}] Resolved User: $resolved_user"
+            [ -n "$resolved_host" ] && log "INFO" "[${name}] Resolved HostName: $resolved_host"
+            [ -n "$resolved_port" ] && log "INFO" "[${name}] Resolved Port: $resolved_port"
+        fi
         return 0
     fi
 
     if [ "$mode" = "doctor" ]; then
-        print_warn "[${name}] SSH 预检失败: ${target}:${port}"
-        print_info "$(analyze_ssh_error "$output")"
+        print_warn "[${name}] SSH 配置解析失败: ${target}"
         [ -n "$output" ] && print_info "SSH 输出: $output"
     else
-        log "ERROR" "[${name}] SSH 预检失败: ${target}:${port}"
-        log "ERROR" "[${name}] $(analyze_ssh_error "$output")"
+        log "ERROR" "[${name}] SSH 配置解析失败: ${target}"
         [ -n "$output" ] && log "ERROR" "[${name}] SSH 输出: $output"
     fi
 
@@ -384,7 +364,7 @@ doctor_entries() {
             print_warn "[${name}] 本地挂载点不存在，挂载时会自动创建"
         fi
 
-        ssh_preflight_check "$name" "$user" "$host" "$port" "doctor" || failed=1
+        ssh_config_check "$name" "$user" "$host" "$port" "doctor" || failed=1
     done
 
     return "$failed"
@@ -580,7 +560,7 @@ mount_entry() {
     log "INFO" "[${name}] 端口: $port"
 
     if command_exists ssh; then
-        ssh_preflight_check "$name" "$user" "$host" "$port" "mount" || return 1
+        ssh_config_check "$name" "$user" "$host" "$port" "mount" || return 1
     fi
 
     log "INFO" "[${name}] 开始执行 sshfs"
