@@ -195,6 +195,8 @@ $HOME/mount/signal-server-data
 
 这要求你的 `~/.ssh/config` 里已经有对应的 `Host signal-server-home` 配置，`User`、`HostName`、`Port`、`IdentityFile` 等都由 SSH 自己解析。
 
+`autosshfs` 在预检查和 `sshfs` 挂载时会主动使用非交互 SSH 选项，尽量绕过 `RemoteCommand`、`RequestTTY`、自动进 shell/tmux 等只适合手工登录的配置。
+
 如果你暂时不想依赖 `~/.ssh/config`，仍然兼容旧格式：
 
 ```bash

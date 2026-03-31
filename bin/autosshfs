@@ -172,6 +172,14 @@ ssh_target() {
     fi
 }
 
+ssh_base_options() {
+    printf '%s' "-T -x -o RequestTTY=no -o RemoteCommand=none -o ClearAllForwardings=yes -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new"
+}
+
+sshfs_ssh_command() {
+    printf '%s' "ssh -T -x -o RequestTTY=no -o RemoteCommand=none -o ClearAllForwardings=yes -o StrictHostKeyChecking=accept-new"
+}
+
 analyze_ssh_error() {
     local output="$1"
 
@@ -211,6 +219,11 @@ ssh_preflight_check() {
     target="$(ssh_target "$user" "$host")"
     output="$(
         ssh \
+            -T \
+            -x \
+            -o RequestTTY=no \
+            -o RemoteCommand=none \
+            -o ClearAllForwardings=yes \
             -o BatchMode=yes \
             -o ConnectTimeout=5 \
             -o StrictHostKeyChecking=accept-new \
@@ -539,12 +552,13 @@ sshfs_options_for_entry() {
 mount_entry() {
     local config="$1"
     local retry="${2:-0}"
-    local parsed name user host remote_path local_path port options target
+    local parsed name user host remote_path local_path port options target ssh_cmd
 
     parsed="$(parse_sshfs_entry "$config")"
     IFS='|' read -r name user host remote_path local_path port <<<"$parsed"
     options="$(sshfs_options_for_entry "$name")"
     target="$(ssh_target "$user" "$host")"
+    ssh_cmd="$(sshfs_ssh_command)"
 
     if is_sshfs_mounted "$local_path"; then
         log "INFO" "[${name}] 已挂载: $local_path"
@@ -570,7 +584,7 @@ mount_entry() {
     fi
 
     log "INFO" "[${name}] 开始执行 sshfs"
-    if sshfs "${target}:${remote_path}" "$local_path" -p "$port" -o "$options" 2>>"$LOG_FILE"; then
+    if sshfs "${target}:${remote_path}" "$local_path" -p "$port" -o "$options" -o "ssh_command=${ssh_cmd}" 2>>"$LOG_FILE"; then
         if is_sshfs_mounted "$local_path"; then
             log "INFO" "[${name}] 挂载成功"
             return 0
