@@ -20,6 +20,9 @@ SSHFS_ENTRIES=(
 MAX_RETRY=3
 RETRY_DELAY=5
 
+# 挂载健康检查超时秒数。用于识别网络中断后残留但不可访问的 sshfs 挂载。
+MOUNT_HEALTH_TIMEOUT=5
+
 # 网络匹配模式:
 #   always   总是允许挂载
 #   match    只有命中下面任一规则才允许挂载

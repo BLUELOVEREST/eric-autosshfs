@@ -13,6 +13,7 @@ SSHFS_ENTRIES=()
 MOUNT_BASE_DIR="$HOME/mount"
 MAX_RETRY=3
 RETRY_DELAY=5
+MOUNT_HEALTH_TIMEOUT=5
 NETWORK_MODE="always"
 NETWORK_GATEWAYS=()
 NETWORK_DNS=()
@@ -503,6 +504,43 @@ mountpoint_has_local_residue() {
     [ -n "$(find "$mount_point" -mindepth 1 -maxdepth 1 2>/dev/null | head -n 1)" ]
 }
 
+path_accessible_with_timeout() {
+    local path="$1"
+    local timeout="${2:-5}"
+    local status_file pid elapsed status
+
+    status_file="$(mktemp "${TMPDIR:-/tmp}/autosshfs-health.XXXXXX")"
+    (
+        ls "$path" >/dev/null 2>&1
+        printf '%s\n' "$?" >"$status_file"
+    ) &
+    pid=$!
+    elapsed=0
+
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$elapsed" -ge "$timeout" ]; then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            rm -f "$status_file"
+            return 124
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    wait "$pid" 2>/dev/null || true
+    status="$(cat "$status_file" 2>/dev/null || printf '1')"
+    rm -f "$status_file"
+    [ "$status" = "0" ]
+}
+
+is_healthy_sshfs_mount() {
+    local mount_point="$1"
+
+    is_sshfs_mounted "$mount_point" || return 1
+    path_accessible_with_timeout "$mount_point" "$MOUNT_HEALTH_TIMEOUT"
+}
+
 sshfs_options_for_entry() {
     local name="$1"
 
@@ -525,8 +563,17 @@ mount_entry() {
     ssh_cmd="$(sshfs_ssh_command)"
 
     if is_sshfs_mounted "$local_path"; then
-        log "INFO" "[${name}] 已挂载: $local_path"
-        return 0
+        if is_healthy_sshfs_mount "$local_path"; then
+            log "INFO" "[${name}] 已挂载且可访问: $local_path"
+            return 0
+        fi
+
+        log "WARN" "[${name}] 检测到 sshfs 挂载残留但不可访问: $local_path"
+        log "WARN" "[${name}] 尝试先卸载残留挂载，再重新挂载"
+        umount_entry "$config" || {
+            log "ERROR" "[${name}] 残留挂载卸载失败，跳过重新挂载"
+            return 1
+        }
     fi
 
     mkdir -p "$local_path" || {
@@ -561,7 +608,7 @@ mount_entry() {
         debug_log "[${name}] sshfs command: sshfs '${target}:${remote_path}' '${local_path}' -o '${options}' -o 'ssh_command=${ssh_cmd}'"
     fi
     if sshfs "${target}:${remote_path}" "$local_path" ${port:+-p "$port"} -o "$options" -o "ssh_command=${ssh_cmd}" 2>>"$sshfs_stderr_file"; then
-        if is_sshfs_mounted "$local_path"; then
+        if is_healthy_sshfs_mount "$local_path"; then
             if [ "${SSHFS_DEBUG:-0}" = "1" ] && [ -s "$sshfs_stderr_file" ]; then
                 while IFS= read -r line; do
                     log "DEBUG" "[${name}] sshfs stderr: $line"
@@ -572,7 +619,7 @@ mount_entry() {
             return 0
         fi
 
-        log "ERROR" "[${name}] sshfs 命令返回成功，但挂载点未处于 sshfs 挂载状态"
+        log "ERROR" "[${name}] sshfs 命令返回成功，但挂载点未处于健康可访问状态"
         log "ERROR" "[${name}] 请检查 $local_path 是否存在残留目录内容、系统弹窗授权、或 macFUSE/sshfs 异常"
     fi
 
@@ -687,8 +734,8 @@ auto_remount() {
     for config in "${SSHFS_ENTRIES[@]:-}"; do
         parsed="$(parse_sshfs_entry "$config")"
         IFS='|' read -r name user host remote_path local_path port <<<"$parsed"
-        if ! is_sshfs_mounted "$local_path"; then
-            log "WARN" "[${name}] 未挂载，开始补挂载"
+        if ! is_healthy_sshfs_mount "$local_path"; then
+            log "WARN" "[${name}] 未挂载或挂载不可访问，开始补挂载"
             mount_entry "$config" || failed=1
         fi
     done

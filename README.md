@@ -225,6 +225,12 @@ autosshfs list
 - 当前网络是否命中配置规则
 - 每个挂载项对应的 SSH 配置是否能被本地 `ssh` 正确解析
 
+`mount-all` 和 `auto-remount` 会检查已有 sshfs 挂载是否仍然可访问。如果网络中断后留下了不可访问的挂载残留，工具会先尝试卸载残留，再重新挂载。健康检查默认超时为 5 秒，可在配置中调整：
+
+```bash
+MOUNT_HEALTH_TIMEOUT=5
+```
+
 ## 网络匹配
 
 默认模板使用 `NETWORK_MODE="match"`。只要以下任意一项匹配，就允许挂载：
